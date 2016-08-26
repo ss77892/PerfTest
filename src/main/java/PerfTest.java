@@ -1,3 +1,6 @@
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.PrintWriter;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -12,10 +15,21 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public class PerfTest {
 
+
+    private static final Logger logger = LoggerFactory.getLogger(PerfTest.class);
+
     static volatile int num =0;
+    static int batch = 500;
+
     static Connection conn;
     static volatile long numberRows = 0;
+    static boolean autoCommit = false;
     public static void main(String[] args) throws Exception {
+        if(args.length < 3) {
+            logger.info("Usage: java -jar ... <zk quorum> <number of threads> <number of rows per" +
+                    " thread> <number of buckets (optional)>");
+            return;
+        }
         final String uri = args[0];
         final int threadsNum = Integer.parseInt(args[1]);
         final int numRows = Integer.parseInt(args[2]);
@@ -27,16 +41,17 @@ public class PerfTest {
     }
     public static void doTest(final String uri, final int threadNum, final int numRows, final int sb) throws SQLException, InterruptedException {
         conn = DriverManager.getConnection("jdbc:phoenix:" + uri);
-        System.out.println("Creating test table...");
+        logger.info("Creating test table...");
         String drl = "DROP TABLE IF EXISTS test_table";
         conn.createStatement().execute(drl);
         String ddl = "CREATE TABLE IF NOT EXISTS test_table (id INTEGER not null , id2 integer not null, id3 integer not null, id4 integer not null, s1 VARCHAR, s2 varchar, s3 varchar constraint pk primary key (id, id2, id3, id4))";
         if (sb > 0) {
             ddl = ddl + " SALT_BUCKETS = " + sb;
         }
-        System.out.println(ddl);
+        logger.info("Table created as : " + ddl);
         conn.createStatement().execute(ddl);
-        System.out.println("Starting " + threadNum + " threads with " + numRows + " rows each");
+        logger.info("Starting " + threadNum + " threads with " + numRows + " rows each");
+	Thread.sleep(10000);
 
         long startTime = System.currentTimeMillis();
         for (int i = 0; i < threadNum; i++) {
@@ -47,7 +62,7 @@ public class PerfTest {
                     Connection c1 = null;
                     try {
                         c1 = DriverManager.getConnection("jdbc:phoenix:" + uri);
-                        c1.setAutoCommit(true);
+                        c1.setAutoCommit(autoCommit);
                     } catch (SQLException e) {
                         e.printStackTrace();
                     }
@@ -68,9 +83,9 @@ public class PerfTest {
                             if(c1.getAutoCommit()) {
                                 numberRows++;
                             } else {
-                                if (j % 1000 == 0) {
+                                if (j % batch == 0) {
                                     c1.commit();
-                                    numberRows += 1000;
+                                    numberRows += batch;
                                 }
                             }
                         }
@@ -96,16 +111,17 @@ public class PerfTest {
             if (numberRows != 0) {
                 long currentRows = numberRows - prevNum;
                 prevNum = numberRows;
-                System.out.println("Wrote " + currentRows);
+                logger.info("Wrote " + currentRows);
             }
         }
         long endTime = System.currentTimeMillis();
 
-        System.out.println("Test took " + (endTime - startTime) + " milliseconds");
-        long perf = numRows /(endTime-startTime) * threadNum * 1000;
-        System.out.println(perf + " records per sec");
-        System.out.println("dropping table");
+        logger.info("Test took " + (endTime - startTime) + " milliseconds");
+        long perf = numRows /((endTime-startTime)/1000) * threadNum;
+        logger.info(perf + " records / sec");
+        logger.info("dropping table");
         drl = "DROP TABLE IF EXISTS test_table";
-        conn.createStatement().execute(drl);
+        //conn.createStatement().execute(drl);
+        conn.close();
     }
 }
